@@ -1,0 +1,95 @@
+name: Mirror Release from Private Repo
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to mirror from private repo'
+        required: true
+        type: string
+
+jobs:
+  mirror-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Mirror release from private repo
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ inputs.tag }}"
+          echo "Mirroring release $TAG from private repository..."
+
+          # Create temp directory for assets
+          mkdir -p /tmp/mirror-assets
+          cd /tmp/mirror-assets
+
+          # Download all release assets from private repo
+          echo "Downloading assets from private repo..."
+          gh release download "$TAG" \
+            --repo Bee-Bros-Software/rbee \
+            --pattern "*.dmg" \
+            --pattern "*.AppImage" \
+            --pattern "*.exe" \
+            --pattern "*.tar.gz" \
+            --pattern "*.zip" || {
+            echo "Failed to download assets. Make sure the release exists in private repo."
+            exit 1
+          }
+
+          echo "Downloaded files:"
+          ls -la
+
+          # Get release info from private repo
+          RELEASE_NAME=$(gh release view "$TAG" --repo Bee-Bros-Software/rbee --json name --jq '.name' || echo "$TAG")
+          RELEASE_BODY=$(gh release view "$TAG" --repo Bee-Bros-Software/rbee --json body --jq '.body' || echo "")
+
+          # Check if release already exists here and delete if it does
+          if gh release view "$TAG" --repo ${{ github.repository }} &>/dev/null; then
+            echo "Release $TAG already exists, deleting it first..."
+            gh release delete "$TAG" --repo ${{ github.repository }} --yes
+          fi
+
+          # Create release notes
+          cat > release_notes.md << EOF
+          # $RELEASE_NAME
+
+          ## Desktop App Installers (GUI + CLI)
+
+          ### macOS
+          - **Apple Silicon (M1/M2)**: Download \`rbee-*-arm64.dmg\`
+          - **Intel**: Download \`rbee-*.dmg\`
+
+          ### Linux
+          - Download \`rbee-*.AppImage\`
+          - Make executable: \`chmod +x rbee-*.AppImage\`
+
+          ### Windows
+          - Download \`rbee-*.exe\` (if available)
+          - Or use web app at https://rbee.ai
+
+          ## CLI Only
+
+          - **macOS/Linux**: Download the \`.tar.gz\` file for your platform
+          - **Windows**: Download the \`.zip\` file
+
+          ---
+
+          $RELEASE_BODY
+          EOF
+
+          # Create the release in this public repo
+          echo "Creating release $TAG in public repository..."
+          gh release create "$TAG" \
+            --repo ${{ github.repository }} \
+            --title "$RELEASE_NAME" \
+            --notes-file release_notes.md \
+            * || {
+            echo "Failed to create release"
+            exit 1
+          }
+
+          echo "✅ Release $TAG successfully mirrored to public repository!"
+          echo "View at: https://github.com/${{ github.repository }}/releases/tag/$TAG"
